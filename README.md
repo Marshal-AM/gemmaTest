@@ -87,10 +87,9 @@ Terminal 1 — start vLLM (once per machine boot):
 ./scripts/start_vllm.sh        # prefix caching, chunked prefill, flash attn
 ```
 
-If you see `libcudart.so.13: cannot open shared object file`, vLLM was installed for CUDA 13 by mistake. Fix:
+If you see `libcudart.so.13` or torchaudio `_torchaudio.abi3.so` errors, the CUDA stack is mismatched. One-shot fix:
 ```bash
-pip uninstall -y vllm
-TORCH_CUDA_INDEX=cu129 ./scripts/install_vllm.sh
+TORCH_CUDA_INDEX=cu129 ./scripts/fix_cuda_stack.sh
 python scripts/check_vllm.py
 ```
 

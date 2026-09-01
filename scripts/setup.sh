@@ -28,8 +28,8 @@ pip install --upgrade pip
 
 CUDA_INDEX="${TORCH_CUDA_INDEX:-cu129}"
 
-echo "==> Installing PyTorch + torchvision (${CUDA_INDEX})"
-pip install torch torchvision --index-url "https://download.pytorch.org/whl/${CUDA_INDEX}"
+echo "==> Installing PyTorch + torchvision + torchaudio (${CUDA_INDEX})"
+pip install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/${CUDA_INDEX}"
 
 echo "==> Installing project dependencies"
 pip install -r requirements.txt

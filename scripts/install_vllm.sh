@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 # Install vLLM with the correct CUDA wheel (NOT default PyPI cu130).
 #
-# Default PyPI vLLM links against libcudart.so.13 (CUDA 13).
-# RTX 5080 / most cloud GPUs need cu129 or cu128 instead.
-#
-# Usage:
-#   ./scripts/install_vllm.sh
-#   TORCH_CUDA_INDEX=cu129 ./scripts/install_vllm.sh
+# IMPORTANT: run install_torch.sh first (or let this script do it) so
+# torch + torchvision + torchaudio all match cu129.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -21,42 +17,41 @@ fi
 # shellcheck disable=SC1091
 source venv/bin/activate
 
-echo "==> Target CUDA index: ${CUDA_INDEX} (libcudart.so.${CUDA_VERSION:0:1}.${CUDA_VERSION:1})"
-echo "==> Removing any existing vLLM install"
-pip uninstall -y vllm 2>/dev/null || true
-
-CPU_ARCH="$(uname -m)"
 PYTORCH_INDEX="https://download.pytorch.org/whl/${CUDA_INDEX}"
+CPU_ARCH="$(uname -m)"
 
-install_from_release_wheel() {
-  local version
-  version="$(curl -fsSL https://api.github.com/repos/vllm-project/vllm/releases/latest \
-    | grep -oP '"tag_name":\s*"\K[^"]+' | sed 's/^v//')"
-  if [ -z "${version}" ]; then
-    return 1
-  fi
+echo "==> Step 1/4: Reinstall matching torch stack (${CUDA_INDEX})"
+pip uninstall -y vllm torch torchvision torchaudio 2>/dev/null || true
+pip install torch torchvision torchaudio --index-url "${PYTORCH_INDEX}"
 
-  local wheel="https://github.com/vllm-project/vllm/releases/download/v${version}/vllm-${version}+cu${CUDA_VERSION}-cp38-abi3-manylinux_2_28_${CPU_ARCH}.whl"
-  echo "==> Installing vLLM ${version}+cu${CUDA_VERSION} from GitHub release"
-  echo "    ${wheel}"
-  pip install "${wheel}" --extra-index-url "${PYTORCH_INDEX}"
-}
+echo "==> Step 2/4: Install vLLM cu${CUDA_VERSION} wheel"
+VLLM_VERSION="$(curl -fsSL https://api.github.com/repos/vllm-project/vllm/releases/latest \
+  | grep -oP '"tag_name":\s*"\K[^"]+' | sed 's/^v//' || true)"
 
-install_from_pip_index() {
-  echo "==> Fallback: pip install vllm via PyTorch ${CUDA_INDEX} index"
-  pip install vllm --extra-index-url "${PYTORCH_INDEX}"
-}
-
-if ! install_from_release_wheel; then
-  echo "WARN: GitHub cu${CUDA_VERSION} wheel not found, trying pip fallback..."
-  install_from_pip_index
+if [ -z "${VLLM_VERSION}" ]; then
+  echo "ERROR: Could not detect latest vLLM release version"
+  exit 1
 fi
 
-echo "==> Installing OpenAI client + audio helpers for Gemma 4"
+WHEEL_URL="https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}+cu${CUDA_VERSION}-cp38-abi3-manylinux_2_28_${CPU_ARCH}.whl"
+echo "    ${WHEEL_URL}"
+
+if ! pip install "${WHEEL_URL}"; then
+  echo "ERROR: Failed to install vLLM cu${CUDA_VERSION} wheel."
+  echo "Try a different CUDA index, e.g.:"
+  echo "  TORCH_CUDA_INDEX=cu128 ./scripts/install_vllm.sh"
+  exit 1
+fi
+
+echo "==> Step 3/4: Re-pin torch stack (vLLM may have pulled wrong CUDA deps)"
+pip install torch torchvision torchaudio --index-url "${PYTORCH_INDEX}" --force-reinstall
+
+echo "==> Step 4/4: Install API client + audio helpers"
 pip install openai librosa soundfile
 
 echo ""
-echo "==> Verifying vLLM import"
+python scripts/check_gpu.py
+python scripts/check_torchaudio.py
 python scripts/check_vllm.py
 
 echo ""
