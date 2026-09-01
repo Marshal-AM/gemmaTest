@@ -38,6 +38,7 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
@@ -219,6 +220,15 @@ async def run_bot(room_url: str, token: str):
     """Run the Gemma + Deepgram bot inside a Daily.co room."""
     transport = None
     try:
+        vad = VADProcessor(
+            vad_analyzer=SileroVADAnalyzer(
+                params=VADParams(
+                    stop_secs=0.5,
+                    min_volume=0.4,
+                )
+            ),
+        )
+
         transport = DailyTransport(
             room_url,
             token,
@@ -228,12 +238,6 @@ async def run_bot(room_url: str, token: str):
                 audio_out_enabled=True,
                 video_out_enabled=False,
                 audio_in_passthrough=True,
-                vad_analyzer=SileroVADAnalyzer(
-                    params=VADParams(
-                        stop_secs=0.5,
-                        min_volume=0.6,
-                    )
-                ),
                 transcription_enabled=True,
             ),
         )
@@ -247,6 +251,7 @@ async def run_bot(room_url: str, token: str):
         pipeline = Pipeline(
             [
                 transport.input(),
+                vad,
                 get_gemma_llm(),
                 tts,
                 transport.output(),

@@ -20,8 +20,8 @@ from pipecat.frames.frames import (
     LLMFullResponseStartFrame,
     LLMTextFrame,
     StartFrame,
-    UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
@@ -106,6 +106,7 @@ class GemmaAudioLLMService(LLMService):
         self._error_count = 0
         self._user_speaking = False
         self._audio_frames: list[AudioRawFrame] = []
+        self._buffer_start_idx = 0
         self._is_processing = False
         self._generation_lock = asyncio.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1)
@@ -281,8 +282,9 @@ class GemmaAudioLLMService(LLMService):
             logger.warning("Already processing audio, skipping")
             return
 
-        frames = list(self._audio_frames)
-        self._audio_frames = []
+        frames = list(self._audio_frames[self._buffer_start_idx :])
+        self._audio_frames.clear()
+        self._buffer_start_idx = 0
 
         if not frames:
             logger.warning("No audio frames to process")
@@ -357,21 +359,27 @@ class GemmaAudioLLMService(LLMService):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, UserStartedSpeakingFrame):
+        if isinstance(frame, VADUserStartedSpeakingFrame):
             self._user_speaking = True
-            self._audio_frames = []
+            # Keep audio already received (includes the chunk that triggered VAD).
+            self._buffer_start_idx = max(0, len(self._audio_frames) - 1)
+            logger.info("VAD: user started speaking — buffering audio")
             await self.push_frame(frame, direction)
         elif isinstance(frame, (AudioRawFrame, InputAudioRawFrame)):
-            if self._user_speaking:
-                self._audio_frames.append(frame)
+            self._audio_frames.append(frame)
             await self.push_frame(frame, direction)
-        elif isinstance(frame, UserStoppedSpeakingFrame):
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._user_speaking = False
+            logger.info(
+                f"VAD: user stopped speaking — processing "
+                f"{len(self._audio_frames) - self._buffer_start_idx} audio frames"
+            )
             await self.push_frame(frame, direction)
             await self.process_generator(self._process_audio_buffer())
         elif isinstance(frame, InterruptionFrame):
             self._user_speaking = False
-            self._audio_frames = []
+            self._audio_frames.clear()
+            self._buffer_start_idx = 0
             await self.push_frame(frame, direction)
         else:
             await self.push_frame(frame, direction)
