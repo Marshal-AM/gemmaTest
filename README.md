@@ -43,10 +43,33 @@ Health check:
 
 ```bash
 curl http://localhost:7860/health
-# {"status":"ok","model_loaded":false,"room_url":"https://....daily.co/..."}
+# {"status":"ok","model_loaded":true,"room_url":"https://....daily.co/..."}
 ```
 
-The room URL is also returned by `POST /start` if you need it programmatically.
+## GPU / CUDA troubleshooting
+
+**Error: `no kernel image is available for execution on the device`**
+
+Your PyTorch CUDA wheel doesn't match your GPU. This is not a model bug — reinstall PyTorch:
+
+```bash
+source venv/bin/activate
+python scripts/check_gpu.py          # diagnose
+
+# Try cu126 (most cloud GPUs), then cu128 (newest GPUs e.g. Blackwell):
+TORCH_CUDA_INDEX=cu126 ./scripts/install_torch.sh
+# or
+TORCH_CUDA_INDEX=cu128 ./scripts/install_torch.sh
+
+./scripts/start.sh
+```
+
+| GPU generation | Try first |
+|----------------|-----------|
+| A100, L4, L40, RTX 30xx/40xx | `cu124` or `cu126` |
+| H100, H200, B200, RTX 50xx | `cu126` or `cu128` |
+
+The model loads **once at server startup** (not on every speech turn). If startup fails, fix PyTorch before joining the room.
 
 ## Environment variables
 
@@ -56,7 +79,7 @@ The room URL is also returned by `POST /start` if you need it programmatically.
 | `DAILY_API_KEY` | Yes | Daily.co API key |
 | `DEEPGRAM_API_KEY` | Yes | Deepgram API key |
 | `HF_LOCAL_FILES_ONLY` | After download | Set `1` to use cached model only |
-| `PRELOAD_MODEL` | No | Set `true` to load model at server startup |
+| `TORCH_CUDA_INDEX` | GPU errors | `cu126` or `cu128` — see GPU troubleshooting |
 | `NGROK_AUTHTOKEN` | No | Public URL tunnel for widgets |
 | `PORT` | No | Server port (default `7860`) |
 
@@ -64,9 +87,11 @@ The room URL is also returned by `POST /start` if you need it programmatically.
 
 ```
 bot.py                  # FastAPI server + Daily/Pipecat pipeline
-gemma_llm_service.py    # Gemma 4 audio LLM (lazy-loaded)
+gemma_llm_service.py    # Gemma 4 audio LLM (GPU, loaded once at startup)
 scripts/
   setup.sh              # One-time dependency install
+  install_torch.sh      # Reinstall PyTorch for your GPU's CUDA version
+  check_gpu.py          # Verify GPU kernels work
   download_model.py     # One-time model download
   start.sh              # Run the server
 requirements.txt
@@ -75,7 +100,6 @@ requirements.txt
 
 ## Notes
 
-- The model is **not** downloaded during `setup.sh` or server startup by default.
-- First speech turn triggers model load into GPU memory (~30–60 s depending on hardware).
-- Set `PRELOAD_MODEL=true` in `.env` to load the model when the server starts instead.
+- The model is **not** downloaded during `setup.sh` — run `download_model.py` once.
+- The model loads **once on GPU at server startup** (~1–2 min), not on every speech turn.
 - `daily-python` (Daily transport) requires Linux/macOS — use a Linux GPU VM for production.

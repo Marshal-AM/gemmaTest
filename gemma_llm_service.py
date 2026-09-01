@@ -113,8 +113,9 @@ class GemmaAudioLLMService(LLMService):
         self._model = None
         self._processor = None
         self._model_load_lock = threading.Lock()
+        self._load_error: str | None = None
         logger.info(
-            f"GemmaAudioLLMService ready (model loads on first use; max "
+            f"GemmaAudioLLMService ready (GPU load happens once at server startup; max "
             f"{max_conversation_turns} conversation turns)"
         )
 
@@ -126,42 +127,80 @@ class GemmaAudioLLMService(LLMService):
         return self._model is not None
 
     def preload(self) -> None:
-        """Load model weights into memory. Call from a background thread at startup if desired."""
+        """Load model weights into GPU memory once."""
         self._ensure_model_loaded()
+
+    def _verify_cuda_gpu(self) -> str:
+        """Confirm PyTorch can execute kernels on the attached GPU."""
+        import torch
+
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "No CUDA GPU detected. This agent requires a GPU.\n"
+                "Run: nvidia-smi\n"
+                "Then: python scripts/check_gpu.py"
+            )
+
+        device_name = torch.cuda.get_device_name(0)
+        try:
+            probe = torch.zeros(1, device="cuda")
+            probe.add_(1)
+            torch.cuda.synchronize()
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"PyTorch cannot run on GPU '{device_name}': {e}\n"
+                "Your PyTorch CUDA build does not match this GPU. Fix:\n"
+                "  TORCH_CUDA_INDEX=cu126 ./scripts/install_torch.sh\n"
+                "  TORCH_CUDA_INDEX=cu128 ./scripts/install_torch.sh\n"
+                "Then: python scripts/check_gpu.py"
+            ) from e
+
+        return device_name
 
     def _ensure_model_loaded(self) -> None:
         if self._model is not None:
             return
 
+        if self._load_error is not None:
+            raise RuntimeError(f"Gemma model failed to load: {self._load_error}")
+
         with self._model_load_lock:
             if self._model is not None:
                 return
+            if self._load_error is not None:
+                raise RuntimeError(f"Gemma model failed to load: {self._load_error}")
 
             from transformers import AutoModelForMultimodalLM, AutoProcessor
 
             token = self._hf_token or _get_hf_token()
             local_only = os.getenv("HF_LOCAL_FILES_ONLY", "0").lower() in ("1", "true", "yes")
 
-            logger.info(f"Loading Gemma model into memory: {self._model_id}")
-            self._processor = AutoProcessor.from_pretrained(
-                self._model_id,
-                token=token,
-                local_files_only=local_only,
-            )
-            self._model = AutoModelForMultimodalLM.from_pretrained(
-                self._model_id,
-                dtype="auto",
-                device_map="auto",
-                token=token,
-                local_files_only=local_only,
-            )
-            logger.info(f"Gemma model loaded: {self._model_id}")
+            try:
+                device_name = self._verify_cuda_gpu()
+                logger.info(f"Loading Gemma on GPU ({device_name}): {self._model_id}")
+
+                self._processor = AutoProcessor.from_pretrained(
+                    self._model_id,
+                    token=token,
+                    local_files_only=local_only,
+                )
+                self._model = AutoModelForMultimodalLM.from_pretrained(
+                    self._model_id,
+                    dtype="auto",
+                    device_map="auto",
+                    token=token,
+                    local_files_only=local_only,
+                )
+                logger.info(f"Gemma ready on GPU ({device_name})")
+            except Exception as e:
+                self._processor = None
+                self._model = None
+                self._load_error = str(e)
+                raise
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
-        if os.getenv("PRELOAD_MODEL", "false").lower() in ("1", "true", "yes"):
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(self._executor, self.preload)
+        # Model is preloaded at server startup in bot.py lifespan.
 
     def _manage_conversation_history(self) -> None:
         if len(self._conversation_history) > self._max_conversation_turns:

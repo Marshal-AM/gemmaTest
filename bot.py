@@ -291,8 +291,14 @@ async def run_bot(room_url: str, token: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create a Daily room and join it when the server starts."""
+    """Load Gemma on GPU once, then create a Daily room and join it."""
     global _active_room_url, _bot_task
+
+    logger.info("Loading Gemma model on GPU (one-time, may take 1-2 minutes)...")
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, get_gemma_llm().preload)
+    logger.info("Gemma model loaded — starting voice session")
+
     room_url, token = await create_daily_room()
     _active_room_url = room_url
     print_join_banner(room_url)

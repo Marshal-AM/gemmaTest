@@ -26,8 +26,10 @@ source venv/bin/activate
 echo "==> Upgrading pip"
 pip install --upgrade pip
 
-echo "==> Installing PyTorch + torchvision (CUDA 12.4 wheel — change if your VM uses a different CUDA)"
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+CUDA_INDEX="${TORCH_CUDA_INDEX:-cu126}"
+
+echo "==> Installing PyTorch + torchvision (${CUDA_INDEX})"
+pip install torch torchvision --index-url "https://download.pytorch.org/whl/${CUDA_INDEX}"
 
 echo "==> Installing project dependencies"
 pip install -r requirements.txt
@@ -46,4 +48,5 @@ echo ""
 echo "Next steps:"
 echo "  1. Edit .env with your API keys (HF_TOKEN, DAILY_API_KEY, DEEPGRAM_API_KEY)"
 echo "  2. Download the model:  python scripts/download_model.py"
-echo "  3. Start the server:    ./scripts/start.sh"
+echo "  3. Check GPU:           python scripts/check_gpu.py"
+echo "  4. Start the server:    ./scripts/start.sh"
