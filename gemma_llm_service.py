@@ -81,8 +81,23 @@ class GemmaAudioLLMService(LLMService):
         hf_token: Optional[str] = None,
         **kwargs,
     ):
-        super().__init__(settings=LLMSettings(model=model_id), **kwargs)
         self._system_prompt = system_prompt or "You are a helpful assistant."
+        super().__init__(
+            settings=LLMSettings(
+                model=model_id,
+                system_instruction=self._system_prompt,
+                temperature=None,
+                max_tokens=max_new_tokens,
+                top_p=None,
+                top_k=None,
+                frequency_penalty=None,
+                presence_penalty=None,
+                seed=None,
+                filter_incomplete_user_turns=False,
+                user_turn_completion_config=None,
+            ),
+            **kwargs,
+        )
         self._max_new_tokens = max_new_tokens
         self._max_conversation_turns = max_conversation_turns
         self._model_id = model_id
