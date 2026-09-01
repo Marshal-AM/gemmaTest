@@ -8,6 +8,7 @@ import asyncio
 import os
 import sys
 import time
+from contextlib import asynccontextmanager
 
 # Monkeypatch for HTTPMethod import compatibility
 if sys.version_info < (3, 11):
@@ -34,7 +35,6 @@ from loguru import logger
 from pyngrok import ngrok
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import EndFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -140,6 +140,7 @@ async def create_daily_room() -> tuple[str, str]:
                     "exp": int(time.time()) + 3600,
                     "enable_chat": False,
                     "enable_emoji_reactions": False,
+                    "privacy": "public",
                 }
             },
         ) as response:
@@ -177,6 +178,26 @@ async def create_daily_room() -> tuple[str, str]:
 
     logger.info(f"Created Daily room: {room_url}")
     return room_url, token
+
+
+_active_room_url: str | None = None
+_bot_task: asyncio.Task | None = None
+
+
+def print_join_banner(room_url: str) -> None:
+    """Print the room URL prominently so you can open it in a browser."""
+    banner = f"""
+{'=' * 72}
+  Tamil Voice Agent is waiting in the Daily room.
+
+  Open this URL in your browser and allow microphone access:
+  {room_url}
+
+  The agent will hear you when you speak in the room.
+{'=' * 72}
+"""
+    print(banner, flush=True)
+    logger.info(f"Join the voice room: {room_url}")
 
 
 _gemma_llm: GemmaAudioLLMService | None = None
@@ -256,7 +277,6 @@ async def run_bot(room_url: str, token: str):
         @transport.event_handler("on_participant_left")
         async def on_participant_left(transport, participant, reason):
             logger.info(f"Participant left: {participant}, reason: {reason}")
-            await task.queue_frame(EndFrame())
 
         runner = PipelineRunner()
         await runner.run(task)
@@ -265,7 +285,24 @@ async def run_bot(room_url: str, token: str):
             await transport.cleanup()
 
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Create a Daily room and join it when the server starts."""
+    global _active_room_url, _bot_task
+    room_url, token = await create_daily_room()
+    _active_room_url = room_url
+    print_join_banner(room_url)
+    _bot_task = asyncio.create_task(run_bot(room_url, token))
+    yield
+    if _bot_task and not _bot_task.done():
+        _bot_task.cancel()
+        try:
+            await _bot_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -278,14 +315,10 @@ app.add_middleware(
 
 @app.post("/start")
 async def start_session():
-    """Create a Daily room, start the bot, and return connection details for the widget."""
-    try:
-        room_url, token = await create_daily_room()
-        asyncio.create_task(run_bot(room_url, token))
-        return JSONResponse(content={"room_url": room_url, "token": token})
-    except Exception as e:
-        logger.error(f"Error starting session: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    """Return the active room URL (room is created automatically on server startup)."""
+    if _active_room_url:
+        return JSONResponse(content={"room_url": _active_room_url})
+    return JSONResponse(status_code=503, content={"error": "Agent room not ready yet"})
 
 
 @app.get("/health")
@@ -294,6 +327,7 @@ async def health_check():
     return {
         "status": "ok",
         "model_loaded": llm.is_model_loaded if llm else False,
+        "room_url": _active_room_url,
     }
 
 

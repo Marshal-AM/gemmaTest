@@ -37,18 +37,16 @@ Start the server:
 ./scripts/start.sh
 ```
 
+The agent creates a Daily room, joins it, and prints the URL. Open that link in your browser, allow microphone access, and start speaking.
+
 Health check:
 
 ```bash
 curl http://localhost:7860/health
-# {"status":"ok"}
+# {"status":"ok","model_loaded":false,"room_url":"https://....daily.co/..."}
 ```
 
-Create a voice session:
-
-```bash
-curl -X POST http://localhost:7860/start
-```
+The room URL is also returned by `POST /start` if you need it programmatically.
 
 ## Environment variables
 
