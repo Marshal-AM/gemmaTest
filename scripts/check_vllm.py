@@ -12,13 +12,14 @@ def main() -> int:
         print("Fix: TORCH_CUDA_INDEX=cu129 ./scripts/install_vllm.sh")
         return 1
     except OSError as e:
-        if "libcudart" in str(e):
+        err = str(e)
+        if "libcudart" in err or "libnvrtc" in err or "torchcodec" in err:
             print(f"ERROR: CUDA runtime mismatch: {e}")
             print()
-            print("PyPI vLLM defaults to CUDA 13 (libcudart.so.13).")
+            print("PyPI vLLM/torchcodec default to CUDA 13 (libcudart.so.13 / libnvrtc.so.13).")
             print("Your GPU VM likely needs cu129:")
-            print("  pip uninstall -y vllm")
-            print("  TORCH_CUDA_INDEX=cu129 ./scripts/install_vllm.sh")
+            print("  TORCH_CUDA_INDEX=cu129 ./scripts/fix_cuda_stack.sh")
+            print("  ./scripts/fix_torchcodec.sh")
             return 1
         raise
 

@@ -87,10 +87,16 @@ Terminal 1 — start vLLM (once per machine boot):
 ./scripts/start_vllm.sh        # prefix caching, chunked prefill, flash attn
 ```
 
-If you see `libcudart.so.13` or torchaudio `_torchaudio.abi3.so` errors, the CUDA stack is mismatched. One-shot fix:
+If you see `libcudart.so.13`, `libnvrtc.so.13`, torchaudio `_torchaudio.abi3.so`, or `libtorchcodec_image.so` errors, the CUDA stack is mismatched. One-shot fix:
 ```bash
 TORCH_CUDA_INDEX=cu129 ./scripts/fix_cuda_stack.sh
+python scripts/check_torchcodec.py
 python scripts/check_vllm.py
+```
+
+Quick torchcodec-only fix (if torch/torchaudio already work):
+```bash
+./scripts/fix_torchcodec.sh
 ```
 
 Terminal 2 — start the voice bot:
