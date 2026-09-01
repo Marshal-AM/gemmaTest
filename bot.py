@@ -39,11 +39,11 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.audio.vad_processor import VADProcessor
-from pipecat.services.sarvam.tts import SarvamHttpTTSService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
 from gemma_llm_service import GemmaAudioLLMService
+from sarvam_tts_service import TamilSarvamTTSService
 
 load_dotenv(override=True)
 
@@ -250,11 +250,11 @@ async def run_bot(room_url: str, token: str):
         )
 
         async with aiohttp.ClientSession() as http_session:
-            tts = SarvamHttpTTSService(
+            tts = TamilSarvamTTSService(
                 api_key=SARVAM_API_KEY,
                 aiohttp_session=http_session,
                 sample_rate=16000,
-                settings=SarvamHttpTTSService.Settings(
+                settings=TamilSarvamTTSService.Settings(
                     voice=SARVAM_SPEAKER,
                     model=SARVAM_MODEL,
                     language=Language.TA_IN,
