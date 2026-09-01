@@ -26,8 +26,8 @@ source venv/bin/activate
 echo "==> Upgrading pip"
 pip install --upgrade pip
 
-echo "==> Installing PyTorch (CUDA 12.4 wheel — change if your VM uses a different CUDA)"
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+echo "==> Installing PyTorch + torchvision (CUDA 12.4 wheel — change if your VM uses a different CUDA)"
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
 echo "==> Installing project dependencies"
 pip install -r requirements.txt
