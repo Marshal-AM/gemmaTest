@@ -27,6 +27,8 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 from pipecat.services.settings import LLMSettings
 
+from pytorch_runtime import configure_pytorch_runtime
+
 MODEL_ID = "google/gemma-4-E2B-it"
 SAMPLE_RATE = 16000
 MAX_AUDIO_SECONDS = 15
@@ -134,6 +136,11 @@ class GemmaAudioLLMService(LLMService):
         """Confirm PyTorch can execute kernels on the attached GPU."""
         import torch
 
+        if configure_pytorch_runtime():
+            logger.info(
+                "Disabled PyTorch native Triton ops (using ATen fallback kernels)"
+            )
+
         if not torch.cuda.is_available():
             raise RuntimeError(
                 "No CUDA GPU detected. This agent requires a GPU.\n"
@@ -184,10 +191,12 @@ class GemmaAudioLLMService(LLMService):
                     token=token,
                     local_files_only=local_only,
                 )
+                attn_impl = os.getenv("GEMMA_ATTN_IMPLEMENTATION", "sdpa")
                 self._model = AutoModelForMultimodalLM.from_pretrained(
                     self._model_id,
                     dtype="auto",
                     device_map="auto",
+                    attn_implementation=attn_impl,
                     token=token,
                     local_files_only=local_only,
                 )

@@ -77,6 +77,18 @@ TORCH_CUDA_INDEX=cu130 ./scripts/install_torch.sh
 
 The model loads **once at server startup** (not on every speech turn). If startup fails, fix PyTorch before joining the room.
 
+**Error: `Triton Error [CUDA]: device kernel image is invalid`**
+
+Basic CUDA works but Gemma inference fails during RoPE matmul. On RTX 5080 / sm_120 this is fixed automatically; if it persists:
+
+```bash
+# In .env:
+PYTORCH_DISABLE_NATIVE_TRITON=1
+
+python scripts/check_gpu.py   # should pass Test 2 (bmm outer-product)
+python bot.py
+```
+
 ## Environment variables
 
 | Variable | Required | Description |
@@ -85,7 +97,9 @@ The model loads **once at server startup** (not on every speech turn). If startu
 | `DAILY_API_KEY` | Yes | Daily.co API key |
 | `DEEPGRAM_API_KEY` | Yes | Deepgram API key |
 | `HF_LOCAL_FILES_ONLY` | After download | Set `1` to use cached model only |
-| `TORCH_CUDA_INDEX` | GPU errors | `cu126` or `cu128` — see GPU troubleshooting |
+| `TORCH_CUDA_INDEX` | GPU errors | `cu129`+ for RTX 50xx — see GPU troubleshooting |
+| `PYTORCH_DISABLE_NATIVE_TRITON` | Triton errors | `auto` (default), or `1` to force ATen fallback |
+| `GEMMA_ATTN_IMPLEMENTATION` | No | `sdpa` (default), `eager`, or `flash_attention_2` |
 | `NGROK_AUTHTOKEN` | No | Public URL tunnel for widgets |
 | `PORT` | No | Server port (default `7860`) |
 
