@@ -10,6 +10,14 @@ import sys
 import time
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+from pytorch_runtime import configure_inference_env
+
+configure_inference_env()
+
 # Monkeypatch for HTTPMethod import compatibility
 if sys.version_info < (3, 11):
     import http
@@ -27,7 +35,6 @@ if sys.version_info < (3, 11):
 
 import aiohttp
 import uvicorn
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -45,8 +52,6 @@ from pipecat.transports.daily.transport import DailyParams, DailyTransport
 from gemma_llm_service import GemmaAudioLLMService
 from sarvam_tts_service import TamilSarvamTTSService
 
-load_dotenv(override=True)
-
 DAILY_API_KEY = os.getenv("DAILY_API_KEY", "")
 PORT = int(os.getenv("PORT", "7860"))
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip().strip('"').strip("'")
@@ -57,7 +62,17 @@ SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.0"))
 # NOTE: This bot requires GPU resources to run efficiently.
 # The Gemma 4 E2B model is compute-intensive and performs best with GPU acceleration.
 
-TAMIL_SYSTEM_PROMPT = (
+TAMIL_SYSTEM_PROMPT_FAST = (
+    "Colloquial Tamil/Tanglish voice assistant on a phone call. "
+    "MOSTLY Tamil with some English words mixed in. "
+    "EXTREMELY concise — one or two short sentences only. "
+    "Friendly casual tone, like chatting with a friend. "
+    "No emojis, no special characters. "
+    "Never add English translations after Tamil lines. "
+    "Remember earlier turns in this call."
+)
+
+TAMIL_SYSTEM_PROMPT_FULL = (
     "MOST IMPORTANT: Talk in Colloquial Tamil with a mixture of Tamil and English words.\n"
     "Speak in an EXTREMELY CONCISE manner.\n"
     "Use TAMIL literals for generating Tamil words and English literals for English words.\n\n"
@@ -111,6 +126,12 @@ TAMIL_SYSTEM_PROMPT = (
     "MOST VERY VERY IMPORTANT: The TAMIL should be MORE in your response THAN ENGLISH!!!!\n\n"
     "REMEMBER CAREFULLY: DO NOT EVER add a translating English phrase next to the colloquial tamil response you have generated.\n\n"
     "ABSOLUTELY NO EMOJIS - This is critical for the TTS system to work properly.\n\n"
+)
+
+TAMIL_SYSTEM_PROMPT = (
+    TAMIL_SYSTEM_PROMPT_FULL
+    if os.getenv("GEMMA_FULL_PROMPT", "0").lower() in ("1", "true", "yes")
+    else TAMIL_SYSTEM_PROMPT_FAST
 )
 
 
@@ -213,8 +234,8 @@ def get_gemma_llm() -> GemmaAudioLLMService:
     if _gemma_llm is None:
         _gemma_llm = GemmaAudioLLMService(
             system_prompt=TAMIL_SYSTEM_PROMPT,
-            max_new_tokens=200,
-            max_conversation_turns=10,
+            max_new_tokens=int(os.getenv("GEMMA_MAX_NEW_TOKENS", "64")),
+            max_conversation_turns=int(os.getenv("GEMMA_MAX_CONVERSATION_TURNS", "3")),
             hf_token=os.getenv("HF_TOKEN"),
         )
     return _gemma_llm
@@ -230,7 +251,7 @@ async def run_bot(room_url: str, token: str):
         vad = VADProcessor(
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
-                    stop_secs=0.5,
+                    stop_secs=float(os.getenv("VAD_STOP_SECS", "0.35")),
                     min_volume=0.4,
                 )
             ),
@@ -308,9 +329,8 @@ async def lifespan(app: FastAPI):
     """Load Gemma on GPU once, then create a Daily room and join it."""
     global _active_room_url, _bot_task
 
-    logger.info("Loading Gemma model on GPU (one-time, may take 1-2 minutes)...")
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, get_gemma_llm().preload)
+    logger.info("Loading Gemma model (one-time, may take 1-2 minutes)...")
+    await get_gemma_llm().preload_async()
     logger.info("Gemma model loaded — starting voice session")
 
     room_url, token = await create_daily_room()

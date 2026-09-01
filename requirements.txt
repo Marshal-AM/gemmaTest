@@ -14,7 +14,8 @@ aiohttp
 python-dotenv
 loguru
 pyngrok
-numpy
+openai
 
-# torch+torchvision are installed by scripts/setup.sh with the correct CUDA wheel for your VM.
+# Optional: vLLM backend (recommended for production speed)
+# pip install "vllm[audio]"  — see scripts/install_vllm.sh
 # For CPU-only dev: pip install torch torchvision

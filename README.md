@@ -77,6 +77,39 @@ TORCH_CUDA_INDEX=cu130 ./scripts/install_torch.sh
 
 The model loads **once at server startup** (not on every speech turn). If startup fails, fix PyTorch before joining the room.
 
+### Inference speed
+
+**Recommended: vLLM backend** (same optimization class as `reference/op.py`)
+
+Terminal 1 — start vLLM (once per machine boot):
+```bash
+./scripts/install_vllm.sh      # one-time: pip install vllm[audio]
+./scripts/start_vllm.sh        # prefix caching, chunked prefill, flash attn
+```
+
+Terminal 2 — start the voice bot:
+```bash
+GEMMA_BACKEND=vllm python bot.py
+```
+
+`reference/op.py` used **Ultravox + vLLM** internally. Our stack uses **Gemma 4 E2B + vLLM** the same way — the `VLLM_*` env vars and `enable-prefix-caching` / `enable-chunked-prefill` flags only apply when vLLM is the inference engine, not Hugging Face Transformers.
+
+**Fallback: Transformers backend** (no separate server):
+```bash
+GEMMA_BACKEND=transformers python bot.py
+```
+
+Uses MTP assistant + bfloat16 + token streaming. Slower than vLLM but simpler to run.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GEMMA_BACKEND` | `vllm` | `vllm` or `transformers` |
+| `VLLM_GPU_MEMORY_UTILIZATION` | `0.85` | Matches reference/op.py |
+| `VLLM_MAX_MODEL_LEN` | `4096` | Matches reference/op.py |
+| `GEMMA_USE_MTP` | `1` | Transformers only — speculative decode |
+| `GEMMA_MAX_NEW_TOKENS` | `64` | Shorter responses = faster |
+| `GEMMA_FULL_PROMPT` | `0` | Compact system prompt |
+
 **Error: `Triton Error [CUDA]: device kernel image is invalid`**
 
 Basic CUDA works but Gemma inference fails during RoPE matmul. On RTX 5080 / sm_120 this is fixed automatically; if it persists:
@@ -102,7 +135,14 @@ python bot.py
 | `HF_LOCAL_FILES_ONLY` | After download | Set `1` to use cached model only |
 | `TORCH_CUDA_INDEX` | GPU errors | `cu129`+ for RTX 50xx — see GPU troubleshooting |
 | `PYTORCH_DISABLE_NATIVE_TRITON` | Triton errors | `auto` (default), or `1` to force ATen fallback |
-| `GEMMA_ATTN_IMPLEMENTATION` | No | `sdpa` (default), `eager`, or `flash_attention_2` |
+| `GEMMA_ATTN_IMPLEMENTATION` | No | `auto` (flash_attn if installed, else sdpa) |
+| `GEMMA_DTYPE` | No | `bfloat16` (default, matches reference/op.py) |
+| `GEMMA_TEMPERATURE` | No | Empty = greedy (fastest). Set `0.3` to match op.py |
+| `GEMMA_TORCH_COMPILE` | No | `0` (default). Set `1` to try `torch.compile` |
+| `GEMMA_USE_MTP` | No | `1` (default) — load assistant model for ~3× faster decode |
+| `GEMMA_MAX_NEW_TOKENS` | No | Max response length (default `64` for voice) |
+| `GEMMA_FULL_PROMPT` | No | `0` (default, fast) or `1` for long prompt with examples |
+| `GEMMA_STREAM_TOKENS` | No | `1` (default) — stream tokens to TTS as they generate |
 | `NGROK_AUTHTOKEN` | No | Public URL tunnel for widgets |
 | `PORT` | No | Server port (default `7860`) |
 

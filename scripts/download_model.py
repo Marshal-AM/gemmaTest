@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download google/gemma-4-E2B-it to the local Hugging Face cache.
+"""Download Gemma 4 E2B + MTP assistant to the local Hugging Face cache.
 
 Run once on the VM after setup:
     source venv/bin/activate
@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
 MODEL_ID = os.getenv("GEMMA_MODEL_ID", "google/gemma-4-E2B-it")
+ASSISTANT_MODEL_ID = os.getenv("GEMMA_ASSISTANT_MODEL_ID", "google/gemma-4-E2B-it-assistant")
+DOWNLOAD_MTP = os.getenv("GEMMA_USE_MTP", "1").lower() in ("1", "true", "yes")
 
 
 def main() -> int:
@@ -24,14 +26,18 @@ def main() -> int:
         print("ERROR: HF_TOKEN is not set. Copy .env.example to .env and add your token.")
         return 1
 
-    print(f"Downloading {MODEL_ID} ...")
-    print("This is a one-time step (~several GB). Grab a coffee.")
-
     from huggingface_hub import snapshot_download
 
-    path = snapshot_download(repo_id=MODEL_ID, token=token)
-    print(f"Done. Model cached at:\n  {path}")
-    print("\nNext: set HF_LOCAL_FILES_ONLY=1 in .env and run ./scripts/start.sh")
+    models = [MODEL_ID]
+    if DOWNLOAD_MTP:
+        models.append(ASSISTANT_MODEL_ID)
+
+    for model_id in models:
+        print(f"Downloading {model_id} ...")
+        path = snapshot_download(repo_id=model_id, token=token)
+        print(f"  cached at: {path}")
+
+    print("\nDone. Set HF_LOCAL_FILES_ONLY=1 in .env and run: python bot.py")
     return 0
 
 

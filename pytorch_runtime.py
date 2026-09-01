@@ -1,4 +1,4 @@
-"""PyTorch runtime tweaks for newer GPUs (e.g. RTX 5080 / sm_120)."""
+"""PyTorch / CUDA runtime tweaks for Gemma inference."""
 
 from __future__ import annotations
 
@@ -6,6 +6,41 @@ import os
 
 _configured = False
 _triton_disabled = False
+_inference_env_configured = False
+
+
+def configure_inference_env() -> None:
+    """Set process-wide env vars for low-latency GPU inference.
+
+    Mirrors the intent of reference/op.py performance flags, adapted for
+    Hugging Face Transformers (not vLLM).
+    """
+    global _inference_env_configured
+    if _inference_env_configured:
+        return
+
+    # General CUDA / PyTorch throughput (safe for HF Transformers).
+    os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "0")
+    os.environ.setdefault("TORCH_USE_CUDA_DSA", "0")
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+    # Reduce allocator churn on long-running voice sessions.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+    _inference_env_configured = True
+
+
+def configure_torch_backends() -> None:
+    """Enable fast math paths once CUDA is available."""
+    import torch
+
+    if not torch.cuda.is_available():
+        return
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+    torch.set_float32_matmul_precision("high")
 
 
 def configure_pytorch_runtime() -> bool:
@@ -29,6 +64,9 @@ def configure_pytorch_runtime() -> bool:
         return _triton_disabled
 
     import torch
+
+    configure_inference_env()
+    configure_torch_backends()
 
     mode = os.getenv("PYTORCH_DISABLE_NATIVE_TRITON", "auto").lower()
     if mode in ("1", "true", "yes"):
