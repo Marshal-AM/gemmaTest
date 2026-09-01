@@ -182,6 +182,8 @@ async def run_bot(room_url: str, token: str):
         if not DEEPGRAM_API_KEY:
             raise ValueError("DEEPGRAM_API_KEY must be set")
 
+        logger.info(f"Joining Daily room: {room_url}")
+
         vad = VADProcessor(
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
@@ -239,6 +241,18 @@ async def run_bot(room_url: str, token: str):
             ),
         )
 
+        @transport.event_handler("on_joined")
+        async def on_joined(transport, data):
+            logger.info(f"Bot joined Daily room: {data}")
+
+        @transport.event_handler("on_error")
+        async def on_error(transport, error):
+            logger.error(f"Daily transport error: {error}")
+
+        @transport.event_handler("on_call_state_updated")
+        async def on_call_state_updated(transport, state):
+            logger.info(f"Daily call state: {state}")
+
         @transport.event_handler("on_first_participant_joined")
         async def on_first_participant_joined(transport, participant):
             logger.info(f"Participant joined Daily room: {participant}")
@@ -254,32 +268,63 @@ async def run_bot(room_url: str, token: str):
             logger.info(f"Participant left: {participant}, reason: {reason}")
 
         runner = PipelineRunner()
+        logger.info("Daily pipeline running — bot is in the room")
         await runner.run(task)
+    except Exception as e:
+        logger.exception(f"Voice bot crashed: {e}")
+        raise
     finally:
         if transport:
             await transport.cleanup()
 
 
+def _log_task_result(task: asyncio.Task, name: str) -> None:
+    """Surface background task failures in the console."""
+    if task.cancelled():
+        logger.warning(f"{name} task cancelled")
+        return
+    exc = task.exception()
+    if exc:
+        logger.error(f"{name} task failed: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load Gemma on GPU once, then create a Daily room and join it."""
+    """Create a Daily room immediately, then warm up vLLM in the background."""
     global _active_room_url, _bot_task
 
-    logger.info("Loading Gemma model (one-time, may take 1-2 minutes)...")
-    await get_gemma_llm().preload_async()
-    logger.info("Gemma model loaded — starting voice session")
-
+    logger.info("Creating Daily room...")
     room_url, token = await create_daily_room()
     _active_room_url = room_url
     print_join_banner(room_url)
+
     _bot_task = asyncio.create_task(run_bot(room_url, token))
-    yield
-    if _bot_task and not _bot_task.done():
-        _bot_task.cancel()
+    _bot_task.add_done_callback(lambda t: _log_task_result(t, "Voice bot"))
+
+    preload_task = asyncio.create_task(get_gemma_llm().preload_async())
+    preload_task.add_done_callback(lambda t: _log_task_result(t, "Gemma preload"))
+
+    async def _log_preload_success() -> None:
         try:
-            await _bot_task
+            await preload_task
+            logger.info("Gemma / vLLM backend ready")
         except asyncio.CancelledError:
-            pass
+            raise
+        except Exception as e:
+            logger.error(f"Gemma preload failed: {e}")
+            logger.error("Start vLLM first: ./scripts/start_vllm.sh")
+
+    asyncio.create_task(_log_preload_success())
+
+    yield
+
+    for task in (preload_task, _bot_task):
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(lifespan=lifespan)
