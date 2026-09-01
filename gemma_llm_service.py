@@ -16,11 +16,13 @@ from pipecat.frames.frames import (
     AudioRawFrame,
     Frame,
     InputAudioRawFrame,
+    InterimTranscriptionFrame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
     StartFrame,
+    TranscriptionFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
@@ -36,7 +38,7 @@ configure_inference_env()
 MODEL_ID = "google/gemma-4-E2B-it"
 ASSISTANT_MODEL_ID = "google/gemma-4-E2B-it-assistant"
 SAMPLE_RATE = 16000
-MAX_AUDIO_SECONDS = float(os.getenv("GEMMA_MAX_AUDIO_SECONDS", "8"))
+MAX_AUDIO_SECONDS = float(os.getenv("GEMMA_MAX_AUDIO_SECONDS", "15"))
 MIN_AUDIO_SECONDS = 0.3
 FALLBACK_RESPONSE = "மன்னிக்கவும், ஏதோ technical issue வந்துச்சு. மறுபடியும் சொல்லுங்க?"
 
@@ -112,6 +114,9 @@ class GemmaAudioLLMService(LLMService):
         self._model_id = model_id
         self._hf_token = hf_token
         self._conversation_history: list[dict[str, str]] = []
+        self._utterance_transcript: list[str] = []
+        self._pending_user_transcript = ""
+        self._transcription_wait_secs = float(os.getenv("TRANSCRIPTION_WAIT_SECS", "1.2"))
         self._error_count = 0
         self._user_speaking = False
         self._audio_frames: list[AudioRawFrame] = []
@@ -380,15 +385,17 @@ class GemmaAudioLLMService(LLMService):
                 f"kept {len(self._conversation_history)} recent turns"
             )
 
-    def _build_enhanced_system_prompt(self) -> str:
-        if not self._conversation_history:
-            return self._system_prompt
+    def _history_for_model(self) -> list[dict[str, str]]:
+        return self._conversation_history[-self._max_conversation_turns :]
 
-        lines = [self._system_prompt, "", "Recent conversation:"]
-        for turn in self._conversation_history[-3:]:
-            lines.append(f"- You: {turn['assistant']}")
-
-        return "\n".join(lines)
+    def _finalize_user_transcript(self) -> str:
+        transcript = " ".join(self._utterance_transcript).strip()
+        if transcript:
+            return transcript
+        pending = self._pending_user_transcript.strip()
+        if pending:
+            return pending
+        return ""
 
     def _frames_to_audio_float32(self, frames: list[AudioRawFrame]) -> Optional[np.ndarray]:
         audio_arrays: list[np.ndarray] = []
@@ -442,16 +449,21 @@ class GemmaAudioLLMService(LLMService):
         return audio_float32
 
     def _build_messages(self, audio_float32: np.ndarray) -> list[dict]:
-        return [
-            {"role": "system", "content": self._build_enhanced_system_prompt()},
+        messages: list[dict] = [{"role": "system", "content": self._system_prompt}]
+        for turn in self._history_for_model():
+            user_text = turn.get("user", "").strip()
+            assistant_text = turn.get("assistant", "").strip()
+            if user_text:
+                messages.append({"role": "user", "content": user_text})
+            if assistant_text:
+                messages.append({"role": "assistant", "content": assistant_text})
+        messages.append(
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": "Respond briefly in Tamil."},
-                    {"type": "audio", "audio": audio_float32},
-                ],
-            },
-        ]
+                "content": [{"type": "audio", "audio": audio_float32}],
+            }
+        )
+        return messages
 
     def _prepare_inputs(self, audio_float32: np.ndarray):
         import torch
@@ -583,10 +595,10 @@ class GemmaAudioLLMService(LLMService):
 
                 if self._backend == "vllm":
                     assert self._vllm_client is not None
-                    system_prompt = self._build_enhanced_system_prompt()
                     async for token_text in self._vllm_client.generate_stream(
-                        system_prompt=system_prompt,
+                        system_prompt=self._system_prompt,
                         audio=audio_float32,
+                        history=self._history_for_model(),
                     ):
                         if not ttfb_stopped:
                             await self.stop_ttfb_metrics()
@@ -638,12 +650,16 @@ class GemmaAudioLLMService(LLMService):
                 yield LLMFullResponseEndFrame()
 
                 if full_response.strip():
+                    user_text = self._finalize_user_transcript()
+                    if not user_text:
+                        user_text = "(User spoke — transcript unavailable)"
                     self._conversation_history.append(
                         {
-                            "user": "[Audio input received]",
+                            "user": user_text,
                             "assistant": full_response.strip(),
                         }
                     )
+                    logger.info(f"User transcript: {user_text[:120]}")
                     logger.info(
                         f"Stored conversation turn. Total history: "
                         f"{len(self._conversation_history)} turns"
@@ -679,9 +695,22 @@ class GemmaAudioLLMService(LLMService):
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
             self._user_speaking = True
+            self._utterance_transcript = []
+            self._pending_user_transcript = ""
             # Keep audio already received (includes the chunk that triggered VAD).
             self._buffer_start_idx = max(0, len(self._audio_frames) - 1)
             logger.info("VAD: user started speaking — buffering audio")
+            await self.push_frame(frame, direction)
+        elif isinstance(frame, TranscriptionFrame):
+            text = getattr(frame, "text", "") or ""
+            if text.strip():
+                self._utterance_transcript.append(text.strip())
+                logger.info(f"Transcription: {text.strip()}")
+            await self.push_frame(frame, direction)
+        elif isinstance(frame, InterimTranscriptionFrame):
+            text = getattr(frame, "text", "") or ""
+            if text.strip():
+                self._pending_user_transcript = text.strip()
             await self.push_frame(frame, direction)
         elif isinstance(frame, (AudioRawFrame, InputAudioRawFrame)):
             self._audio_frames.append(frame)
@@ -693,9 +722,13 @@ class GemmaAudioLLMService(LLMService):
                 f"{len(self._audio_frames) - self._buffer_start_idx} audio frames"
             )
             await self.push_frame(frame, direction)
+            if self._transcription_wait_secs > 0:
+                await asyncio.sleep(self._transcription_wait_secs)
             await self.process_generator(self._process_audio_buffer())
         elif isinstance(frame, InterruptionFrame):
             self._user_speaking = False
+            self._utterance_transcript = []
+            self._pending_user_transcript = ""
             self._audio_frames.clear()
             self._buffer_start_idx = 0
             await self.push_frame(frame, direction)

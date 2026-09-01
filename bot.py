@@ -47,7 +47,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.transcriptions.language import Language
-from pipecat.transports.daily.transport import DailyParams, DailyTransport
+from pipecat.transports.daily.transport import DailyParams, DailyTransport, DailyTranscriptionSettings
 
 from gemma_llm_service import GemmaAudioLLMService
 from sarvam_tts_service import TamilSarvamTTSService
@@ -62,76 +62,12 @@ SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.0"))
 # NOTE: This bot requires GPU resources to run efficiently.
 # The Gemma 4 E2B model is compute-intensive and performs best with GPU acceleration.
 
-TAMIL_SYSTEM_PROMPT_FAST = (
-    "Colloquial Tamil/Tanglish voice assistant on a phone call. "
-    "MOSTLY Tamil with some English words mixed in. "
-    "EXTREMELY concise — one or two short sentences only. "
-    "Friendly casual tone, like chatting with a friend. "
-    "No emojis, no special characters. "
-    "Never add English translations after Tamil lines. "
-    "Remember earlier turns in this call."
-)
-
-TAMIL_SYSTEM_PROMPT_FULL = (
-    "MOST IMPORTANT: Talk in Colloquial Tamil with a mixture of Tamil and English words.\n"
-    "Speak in an EXTREMELY CONCISE manner.\n"
-    "Use TAMIL literals for generating Tamil words and English literals for English words.\n\n"
-
-    "You are a helpful AI assistant in a phone call. Your goal is to demonstrate "
-    "your capabilities in a succinct way. Keep your responses concise and natural "
-    "for voice conversation. Don't include special characters in your answers. "
-    "Respond to what the user said in a creative and helpful way.\n\n"
-
-    "CRITICAL: NEVER EVER use emojis in your responses. Do not include any emoji characters whatsoever. "
-    "No smileys, no emoticons, no symbols like 😊 or any Unicode emoji. Only use plain text.\n\n"
-
-    "IMPORTANT - CONVERSATION MEMORY:\n"
-    "- You can see previous conversation turns in the context above.\n"
-    "- ALWAYS remember and reference information from earlier in the conversation.\n"
-    "- Use context naturally to provide relevant, connected responses.\n"
-    "- If the user asks about something mentioned earlier, recall it accurately.\n"
-    "- Treat the entire call as ONE continuous conversation.\n\n"
-
-    "ADDITIONAL INSTRUCTIONS (COLLOQUIAL TAMIL MODE):\n"
-    "- Speak in a mix of Tamil and English words (Tanglish) in a friendly, casual tone.\n"
-    "- Sound like a native Tamil speaker chatting informally — natural and expressive.\n"
-    "- Use light humor, friendly fillers, and casual phrasing.\n"
-    "- Keep sentences short and conversational, as if talking over a phone call.\n"
-    "- Avoid being overly formal or robotic; sound warm and human-like.\n"
-    "- If explaining something complex, mix Tamil and English naturally.\n\n"
-
-    "EXAMPLES OF HOW TO SPEAK (TANGLISH STYLE):\n\n"
-    "Example 1:\n"
-    "User: Hey, what are you doing?\n"
-    "Assistant: சும்மா தான், coffee குடிக்கறேன். நீ என்ன பண்ணுறே?\n\n"
-
-    "Example 2:\n"
-    "User: Can you explain what AI means?\n"
-    "Assistant: AIன்னா Artificial Intelligence — basically, machine நம்ம மாதிரி think பண்ணும், learn பண்ணும்.\n\n"
-
-    "Example 3:\n"
-    "User: Weather எப்படி இருக்கு அங்கே?\n"
-    "Assistant: இங்க நாறா சூடா இருக்கு, fan full speedல போடணும் போல இருக்கு!\n\n"
-
-    "Example 4:\n"
-    "User: Tell me a joke.\n"
-    "Assistant: சரி, ஓன்னு கேள் — ஒரு computerக்கு fever வந்தா, அது சொல்லும் I've got a virus! ஹா ஹா!\n\n"
-
-    "Example 5:\n"
-    "User: Can you help me with my project?\n"
-    "Assistant: சொல்லு என்ன project. நம்ம சேர்ந்து பண்ணலாம் easyஆ.\n\n"
-
-    "Remember: Mix Tamil and English naturally, keep it friendly and human, like a real phone chat between buddies.\n\n"
-
-    "MOST VERY VERY IMPORTANT: The TAMIL should be MORE in your response THAN ENGLISH!!!!\n\n"
-    "REMEMBER CAREFULLY: DO NOT EVER add a translating English phrase next to the colloquial tamil response you have generated.\n\n"
-    "ABSOLUTELY NO EMOJIS - This is critical for the TTS system to work properly.\n\n"
-)
-
-TAMIL_SYSTEM_PROMPT = (
-    TAMIL_SYSTEM_PROMPT_FULL
-    if os.getenv("GEMMA_FULL_PROMPT", "0").lower() in ("1", "true", "yes")
-    else TAMIL_SYSTEM_PROMPT_FAST
+# Simple persona for the cab booking voice agent.
+SYSTEM_PROMPT = os.getenv(
+    "SYSTEM_PROMPT",
+    "Your name is Malar and you work at XYZ, a cab company where people book cabs. "
+    "Help callers with bookings, pickup, drop-off, fares, and ride status. "
+    "Keep responses short and clear for a phone call.",
 )
 
 
@@ -233,9 +169,9 @@ def get_gemma_llm() -> GemmaAudioLLMService:
     global _gemma_llm
     if _gemma_llm is None:
         _gemma_llm = GemmaAudioLLMService(
-            system_prompt=TAMIL_SYSTEM_PROMPT,
-            max_new_tokens=int(os.getenv("GEMMA_MAX_NEW_TOKENS", "64")),
-            max_conversation_turns=int(os.getenv("GEMMA_MAX_CONVERSATION_TURNS", "3")),
+            system_prompt=SYSTEM_PROMPT,
+            max_new_tokens=int(os.getenv("GEMMA_MAX_NEW_TOKENS", "128")),
+            max_conversation_turns=int(os.getenv("GEMMA_MAX_CONVERSATION_TURNS", "10")),
             hf_token=os.getenv("HF_TOKEN"),
         )
     return _gemma_llm
@@ -267,6 +203,11 @@ async def run_bot(room_url: str, token: str):
                 video_out_enabled=False,
                 audio_in_passthrough=True,
                 transcription_enabled=True,
+                transcription_settings=DailyTranscriptionSettings(
+                    language=os.getenv("DAILY_TRANSCRIPTION_LANGUAGE", "ta"),
+                    model=os.getenv("DAILY_TRANSCRIPTION_MODEL", "nova-2-general"),
+                    punctuate=True,
+                ),
             ),
         )
 
@@ -278,7 +219,7 @@ async def run_bot(room_url: str, token: str):
                 settings=TamilSarvamTTSService.Settings(
                     voice=SARVAM_SPEAKER,
                     model=SARVAM_MODEL,
-                    language=Language.TA_IN,
+                    language=Language.EN_IN,
                     pace=SARVAM_PACE,
                 ),
             )

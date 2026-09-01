@@ -79,7 +79,9 @@ class GemmaVLLMClient:
         last_error = "unknown"
 
         async with aiohttp.ClientSession() as session:
+            attempt = 0
             while time.monotonic() < deadline:
+                attempt += 1
                 try:
                     async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                         if resp.status == 200:
@@ -88,6 +90,11 @@ class GemmaVLLMClient:
                         last_error = f"HTTP {resp.status}"
                 except Exception as e:
                     last_error = str(e)
+                if attempt == 1 or attempt % 5 == 0:
+                    elapsed = int(time.monotonic() - (deadline - timeout_s))
+                    logger.info(
+                        f"Waiting for vLLM at {health_url} ({elapsed}s, last error: {last_error})"
+                    )
                 await asyncio.sleep(poll_s)
 
         raise RuntimeError(
@@ -95,10 +102,24 @@ class GemmaVLLMClient:
             "Start it with: ./scripts/start_vllm.sh"
         )
 
-    def _build_messages(self, system_prompt: str, audio: np.ndarray) -> list[dict]:
+    def _build_messages(
+        self,
+        system_prompt: str,
+        audio: np.ndarray,
+        history: list[dict[str, str]] | None = None,
+    ) -> list[dict]:
+        """Build chat messages: text history for prior turns, audio only for the current turn."""
+        messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        for turn in history or []:
+            user_text = turn.get("user", "").strip()
+            assistant_text = turn.get("assistant", "").strip()
+            if user_text:
+                messages.append({"role": "user", "content": user_text})
+            if assistant_text:
+                messages.append({"role": "assistant", "content": assistant_text})
+
         audio_url = float32_audio_to_wav_data_url(audio)
-        return [
-            {"role": "system", "content": system_prompt},
+        messages.append(
             {
                 "role": "user",
                 "content": [
@@ -106,16 +127,20 @@ class GemmaVLLMClient:
                         "type": "audio_url",
                         "audio_url": {"url": audio_url},
                     },
-                    {"type": "text", "text": "Respond briefly in Tamil."},
                 ],
-            },
-        ]
+            }
+        )
+        return messages
 
     async def generate_stream(
-        self, *, system_prompt: str, audio: np.ndarray
+        self,
+        *,
+        system_prompt: str,
+        audio: np.ndarray,
+        history: list[dict[str, str]] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream decoded text tokens from vLLM."""
-        messages = self._build_messages(system_prompt, audio)
+        messages = self._build_messages(system_prompt, audio, history)
         t0 = time.perf_counter()
         first = True
 
