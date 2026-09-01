@@ -4,6 +4,7 @@
 
 import asyncio
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +15,8 @@ from loguru import logger
 
 from pipecat.frames.frames import (
     AudioRawFrame,
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     Frame,
     InputAudioRawFrame,
     InterimTranscriptionFrame,
@@ -41,6 +44,7 @@ SAMPLE_RATE = 16000
 MAX_AUDIO_SECONDS = float(os.getenv("GEMMA_MAX_AUDIO_SECONDS", "15"))
 MIN_AUDIO_SECONDS = 0.3
 FALLBACK_RESPONSE = "மன்னிக்கவும், ஏதோ technical issue வந்துச்சு. மறுபடியும் சொல்லுங்க?"
+PHRASE_FLUSH_CHARS = int(os.getenv("TTS_PHRASE_FLUSH_CHARS", "12"))
 
 
 def _get_hf_token() -> str:
@@ -116,7 +120,11 @@ class GemmaAudioLLMService(LLMService):
         self._conversation_history: list[dict[str, str]] = []
         self._utterance_transcript: list[str] = []
         self._pending_user_transcript = ""
-        self._transcription_wait_secs = float(os.getenv("TRANSCRIPTION_WAIT_SECS", "1.2"))
+        self._transcription_wait_secs = float(os.getenv("TRANSCRIPTION_WAIT_SECS", "0"))
+        self._awaiting_transcript_for_turn = False
+        self._bot_speaking = False
+        self._cancel_generation = asyncio.Event()
+        self._preserve_audio_on_interrupt = False
         self._error_count = 0
         self._user_speaking = False
         self._audio_frames: list[AudioRawFrame] = []
@@ -385,6 +393,28 @@ class GemmaAudioLLMService(LLMService):
                 f"kept {len(self._conversation_history)} recent turns"
             )
 
+    def _maybe_flush_tts_phrase(self, phrase_buf: str) -> str | None:
+        """Return '.' to force TTS to synthesize an early phrase (batch HTTP TTS)."""
+        stripped = phrase_buf.strip()
+        if len(stripped) < PHRASE_FLUSH_CHARS:
+            return None
+        if stripped.endswith((".", "!", "?")):
+            return None
+        if re.search(r"[,;:\-]", stripped):
+            return "."
+        return None
+
+    def _yield_llm_token(
+        self, token_text: str, phrase_buf: str
+    ) -> tuple[list[LLMTextFrame], str]:
+        frames = [LLMTextFrame(text=token_text)]
+        phrase_buf += token_text
+        flush = self._maybe_flush_tts_phrase(phrase_buf)
+        if flush:
+            frames.append(LLMTextFrame(text=flush))
+            phrase_buf = ""
+        return frames, phrase_buf
+
     def _history_for_model(self) -> list[dict[str, str]]:
         return self._conversation_history[-self._max_conversation_turns :]
 
@@ -582,9 +612,11 @@ class GemmaAudioLLMService(LLMService):
             f"Processing audio: {len(audio_float32) / SAMPLE_RATE:.2f} seconds, "
             f"{len(audio_float32)} samples"
         )
+        t_turn_start = time.perf_counter()
 
         async with self._generation_lock:
             self._is_processing = True
+            self._cancel_generation.clear()
             try:
                 await self.start_ttfb_metrics()
                 await self.start_processing_metrics()
@@ -592,6 +624,7 @@ class GemmaAudioLLMService(LLMService):
 
                 full_response = ""
                 ttfb_stopped = False
+                phrase_buf = ""
 
                 if self._backend == "vllm":
                     assert self._vllm_client is not None
@@ -599,12 +632,22 @@ class GemmaAudioLLMService(LLMService):
                         system_prompt=self._system_prompt,
                         audio=audio_float32,
                         history=self._history_for_model(),
+                        cancel_event=self._cancel_generation,
                     ):
+                        if self._cancel_generation.is_set():
+                            logger.info("LLM generation cancelled by user interruption")
+                            break
                         if not ttfb_stopped:
                             await self.stop_ttfb_metrics()
                             ttfb_stopped = True
+                            logger.info(
+                                f"Turn latency: LLM TTFB {time.perf_counter() - t_turn_start:.2f}s "
+                                f"(since VAD stop)"
+                            )
                         full_response += token_text
-                        yield LLMTextFrame(text=token_text)
+                        token_frames, phrase_buf = self._yield_llm_token(token_text, phrase_buf)
+                        for frame in token_frames:
+                            yield frame
                 else:
                     loop = asyncio.get_running_loop()
                     token_queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -627,6 +670,9 @@ class GemmaAudioLLMService(LLMService):
                     inference_task = loop.run_in_executor(self._executor, run_inference)
                     streamed_any = False
                     while True:
+                        if self._cancel_generation.is_set():
+                            logger.info("LLM generation cancelled by user interruption")
+                            break
                         token_text = await token_queue.get()
                         if token_text is None:
                             break
@@ -635,7 +681,9 @@ class GemmaAudioLLMService(LLMService):
                             ttfb_stopped = True
                         streamed_any = True
                         full_response += token_text
-                        yield LLMTextFrame(text=token_text)
+                        token_frames, phrase_buf = self._yield_llm_token(token_text, phrase_buf)
+                        for frame in token_frames:
+                            yield frame
 
                     await inference_task
                     if not full_response:
@@ -647,7 +695,15 @@ class GemmaAudioLLMService(LLMService):
                     await self.stop_ttfb_metrics()
 
                 await self.stop_processing_metrics()
+                if self._cancel_generation.is_set():
+                    yield LLMFullResponseEndFrame()
+                    return
+
                 yield LLMFullResponseEndFrame()
+                logger.info(
+                    f"Turn latency: LLM complete {time.perf_counter() - t_turn_start:.2f}s "
+                    f"(since VAD stop)"
+                )
 
                 if full_response.strip():
                     user_text = self._finalize_user_transcript()
@@ -659,6 +715,7 @@ class GemmaAudioLLMService(LLMService):
                             "assistant": full_response.strip(),
                         }
                     )
+                    self._awaiting_transcript_for_turn = user_text.startswith("(")
                     logger.info(f"User transcript: {user_text[:120]}")
                     logger.info(
                         f"Stored conversation turn. Total history: "
@@ -693,7 +750,32 @@ class GemmaAudioLLMService(LLMService):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, VADUserStartedSpeakingFrame):
+        if isinstance(frame, InterruptionFrame):
+            logger.info("Interruption received — cancelling in-flight generation")
+            self._cancel_generation.set()
+            self._is_processing = False
+            self._user_speaking = False
+            self._utterance_transcript = []
+            self._pending_user_transcript = ""
+            if self._preserve_audio_on_interrupt:
+                self._buffer_start_idx = max(0, len(self._audio_frames) - 1)
+            else:
+                self._audio_frames.clear()
+                self._buffer_start_idx = 0
+            self._preserve_audio_on_interrupt = False
+            return
+
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_speaking = True
+            await self.push_frame(frame, direction)
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_speaking = False
+            await self.push_frame(frame, direction)
+        elif isinstance(frame, VADUserStartedSpeakingFrame):
+            if self._bot_speaking or self._is_processing:
+                logger.info("User barge-in — stopping bot speech and LLM generation")
+                self._preserve_audio_on_interrupt = True
+                await self.broadcast_interruption()
             self._user_speaking = True
             self._utterance_transcript = []
             self._pending_user_transcript = ""
@@ -706,6 +788,14 @@ class GemmaAudioLLMService(LLMService):
             if text.strip():
                 self._utterance_transcript.append(text.strip())
                 logger.info(f"Transcription: {text.strip()}")
+                if (
+                    self._awaiting_transcript_for_turn
+                    and self._conversation_history
+                    and self._conversation_history[-1]["user"].startswith("(")
+                ):
+                    self._conversation_history[-1]["user"] = text.strip()
+                    self._awaiting_transcript_for_turn = False
+                    logger.info("Backfilled user transcript into conversation history")
             await self.push_frame(frame, direction)
         elif isinstance(frame, InterimTranscriptionFrame):
             text = getattr(frame, "text", "") or ""
@@ -725,12 +815,5 @@ class GemmaAudioLLMService(LLMService):
             if self._transcription_wait_secs > 0:
                 await asyncio.sleep(self._transcription_wait_secs)
             await self.process_generator(self._process_audio_buffer())
-        elif isinstance(frame, InterruptionFrame):
-            self._user_speaking = False
-            self._utterance_transcript = []
-            self._pending_user_transcript = ""
-            self._audio_frames.clear()
-            self._buffer_start_idx = 0
-            await self.push_frame(frame, direction)
         else:
             await self.push_frame(frame, direction)

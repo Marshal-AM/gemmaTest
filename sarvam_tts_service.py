@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import io
+import time
 import wave
 from collections.abc import AsyncGenerator
 
@@ -17,6 +18,7 @@ from loguru import logger
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.sarvam._sdk import sdk_headers
 from pipecat.services.sarvam.tts import SarvamHttpTTSService
+from pipecat.services.tts_service import TextAggregationMode
 from pipecat.utils.tracing.service_decorators import traced_tts
 
 
@@ -33,8 +35,14 @@ def _parse_wav_pcm(audio_bytes: bytes) -> tuple[bytes, int]:
 class TamilSarvamTTSService(SarvamHttpTTSService):
     """Sarvam HTTP TTS with API payload + WAV metadata fixes for Tamil voice bots."""
 
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("push_start_frame", True)
+        kwargs.setdefault("text_aggregation_mode", TextAggregationMode.SENTENCE)
+        super().__init__(*args, **kwargs)
+
     @traced_tts
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
+        t0 = time.perf_counter()
         try:
             payload: dict = {
                 "text": text,
@@ -95,6 +103,7 @@ class TamilSarvamTTSService(SarvamHttpTTSService):
                 num_channels=1,
                 context_id=context_id,
             )
+            logger.info(f"Sarvam TTS: {time.perf_counter() - t0:.2f}s for {len(text)} chars")
         except Exception as e:
             yield ErrorFrame(error=f"Error generating TTS: {e}", exception=e)
         finally:

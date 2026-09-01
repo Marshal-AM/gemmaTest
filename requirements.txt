@@ -1,5 +1,5 @@
 # Pipecat voice pipeline + API server
-pipecat-ai[daily,silero]
+pipecat-ai[daily,silero,deepgram]
 
 # Gemma 4 multimodal model (install torch+torchvision separately — see scripts/setup.sh)
 transformers>=5.16

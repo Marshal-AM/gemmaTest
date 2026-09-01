@@ -138,6 +138,7 @@ class GemmaVLLMClient:
         system_prompt: str,
         audio: np.ndarray,
         history: list[dict[str, str]] | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream decoded text tokens from vLLM."""
         messages = self._build_messages(system_prompt, audio, history)
@@ -152,13 +153,18 @@ class GemmaVLLMClient:
             stream=True,
         )
 
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content if chunk.choices else None
-            if not delta:
-                continue
-            if first:
-                logger.info(f"vLLM TTFB: {time.perf_counter() - t0:.2f}s")
-                first = False
-            yield delta
+        try:
+            async for chunk in stream:
+                if cancel_event and cancel_event.is_set():
+                    break
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if not delta:
+                    continue
+                if first:
+                    logger.info(f"vLLM TTFB: {time.perf_counter() - t0:.2f}s")
+                    first = False
+                yield delta
+        finally:
+            await stream.close()
 
         logger.info(f"vLLM total: {time.perf_counter() - t0:.2f}s")

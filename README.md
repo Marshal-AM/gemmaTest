@@ -1,12 +1,12 @@
-# Tamil Voice Agent (Gemma 4 + Daily + Sarvam)
+# Voice Agent (Gemma 4 + Daily + Deepgram)
 
-Real-time voice bot that listens via Daily.co, reasons over speech with **google/gemma-4-E2B-it**, and responds in colloquial Tamil via **Sarvam Bulbul** TTS.
+Real-time voice bot that listens via Daily.co, reasons over speech with **google/gemma-4-E2B-it**, and responds via **Deepgram Aura** TTS.
 
 ## Requirements
 
 - Linux VM with **NVIDIA GPU** (recommended: 16 GB+ VRAM)
 - Python 3.11+
-- API keys: [Hugging Face](https://huggingface.co/settings/tokens), [Daily.co](https://dashboard.daily.co), [Sarvam AI](https://dashboard.sarvam.ai)
+- API keys: [Hugging Face](https://huggingface.co/settings/tokens), [Daily.co](https://dashboard.daily.co), [Deepgram](https://console.deepgram.com)
 
 ## Quick start (VM)
 
@@ -154,10 +154,8 @@ python bot.py
 |----------|----------|-------------|
 | `HF_TOKEN` | Yes | Hugging Face token (accept Gemma license first) |
 | `DAILY_API_KEY` | Yes | Daily.co API key |
-| `SARVAM_API_KEY` | Yes | Sarvam AI API key |
-| `SARVAM_SPEAKER` | No | Bulbul voice (default `kavitha`) |
-| `SARVAM_MODEL` | No | `bulbul:v3` (default) or `bulbul:v2` |
-| `SARVAM_PACE` | No | Speech pace (default `1.0`) |
+| `DEEPGRAM_API_KEY` | Yes | Deepgram API key (Aura TTS) |
+| `DEEPGRAM_VOICE` | No | Aura voice (default `aura-2-helena-en`) |
 | `HF_LOCAL_FILES_ONLY` | After download | Set `1` to use cached model only |
 | `TORCH_CUDA_INDEX` | GPU errors | `cu129`+ for RTX 50xx — see GPU troubleshooting |
 | `PYTORCH_DISABLE_NATIVE_TRITON` | Triton errors | `auto` (default), or `1` to force ATen fallback |

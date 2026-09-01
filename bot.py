@@ -46,18 +46,16 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.audio.vad_processor import VADProcessor
-from pipecat.transcriptions.language import Language
+from pipecat.services.deepgram.tts import DeepgramTTSService
+from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transports.daily.transport import DailyParams, DailyTransport, DailyTranscriptionSettings
 
 from gemma_llm_service import GemmaAudioLLMService
-from sarvam_tts_service import TamilSarvamTTSService
 
 DAILY_API_KEY = os.getenv("DAILY_API_KEY", "")
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip().strip('"').strip("'")
+DEEPGRAM_VOICE = os.getenv("DEEPGRAM_VOICE", "aura-2-helena-en")
 PORT = int(os.getenv("PORT", "7860"))
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip().strip('"').strip("'")
-SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "kavitha")
-SARVAM_MODEL = os.getenv("SARVAM_MODEL", "bulbul:v3")
-SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.0"))
 
 # NOTE: This bot requires GPU resources to run efficiently.
 # The Gemma 4 E2B model is compute-intensive and performs best with GPU acceleration.
@@ -67,7 +65,7 @@ SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
     "Your name is Malar and you work at XYZ, a cab company where people book cabs. "
     "Help callers with bookings, pickup, drop-off, fares, and ride status. "
-    "Keep responses short and clear for a phone call.",
+    "Reply in ONE short sentence under 15 words. Be direct.",
 )
 
 
@@ -170,7 +168,7 @@ def get_gemma_llm() -> GemmaAudioLLMService:
     if _gemma_llm is None:
         _gemma_llm = GemmaAudioLLMService(
             system_prompt=SYSTEM_PROMPT,
-            max_new_tokens=int(os.getenv("GEMMA_MAX_NEW_TOKENS", "128")),
+            max_new_tokens=int(os.getenv("GEMMA_MAX_NEW_TOKENS", "48")),
             max_conversation_turns=int(os.getenv("GEMMA_MAX_CONVERSATION_TURNS", "10")),
             hf_token=os.getenv("HF_TOKEN"),
         )
@@ -178,17 +176,17 @@ def get_gemma_llm() -> GemmaAudioLLMService:
 
 
 async def run_bot(room_url: str, token: str):
-    """Run the Gemma + Sarvam bot inside a Daily.co room."""
+    """Run the Gemma + Deepgram bot inside a Daily.co room."""
     transport = None
     try:
-        if not SARVAM_API_KEY:
-            raise ValueError("SARVAM_API_KEY must be set")
+        if not DEEPGRAM_API_KEY:
+            raise ValueError("DEEPGRAM_API_KEY must be set")
 
         vad = VADProcessor(
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
-                    stop_secs=float(os.getenv("VAD_STOP_SECS", "0.35")),
-                    min_volume=0.4,
+                    stop_secs=float(os.getenv("VAD_STOP_SECS", "0.2")),
+                    min_volume=0.35,
                 )
             ),
         )
@@ -211,55 +209,52 @@ async def run_bot(room_url: str, token: str):
             ),
         )
 
-        async with aiohttp.ClientSession() as http_session:
-            tts = TamilSarvamTTSService(
-                api_key=SARVAM_API_KEY,
-                aiohttp_session=http_session,
-                sample_rate=16000,
-                settings=TamilSarvamTTSService.Settings(
-                    voice=SARVAM_SPEAKER,
-                    model=SARVAM_MODEL,
-                    language=Language.EN_IN,
-                    pace=SARVAM_PACE,
-                ),
-            )
+        tts = DeepgramTTSService(
+            api_key=DEEPGRAM_API_KEY,
+            sample_rate=16000,
+            push_start_frame=True,
+            text_aggregation_mode=TextAggregationMode.TOKEN,
+            settings=DeepgramTTSService.Settings(
+                voice=DEEPGRAM_VOICE,
+            ),
+        )
 
-            pipeline = Pipeline(
-                [
-                    transport.input(),
-                    vad,
-                    get_gemma_llm(),
-                    tts,
-                    transport.output(),
-                ]
-            )
+        pipeline = Pipeline(
+            [
+                transport.input(),
+                vad,
+                get_gemma_llm(),
+                tts,
+                transport.output(),
+            ]
+        )
 
-            task = PipelineTask(
-                pipeline,
-                params=PipelineParams(
-                    audio_in_sample_rate=16000,
-                    audio_out_sample_rate=16000,
-                    enable_metrics=True,
-                    enable_usage_metrics=True,
-                ),
-            )
+        task = PipelineTask(
+            pipeline,
+            params=PipelineParams(
+                audio_in_sample_rate=16000,
+                audio_out_sample_rate=16000,
+                enable_metrics=True,
+                enable_usage_metrics=True,
+            ),
+        )
 
-            @transport.event_handler("on_first_participant_joined")
-            async def on_first_participant_joined(transport, participant):
-                logger.info(f"Participant joined Daily room: {participant}")
-                await transport.capture_participant_transcription(participant["id"])
+        @transport.event_handler("on_first_participant_joined")
+        async def on_first_participant_joined(transport, participant):
+            logger.info(f"Participant joined Daily room: {participant}")
+            await transport.capture_participant_transcription(participant["id"])
 
-            @transport.event_handler("on_participant_joined")
-            async def on_participant_joined(transport, participant):
-                logger.info(f"Participant joined: {participant}")
-                await transport.capture_participant_transcription(participant["id"])
+        @transport.event_handler("on_participant_joined")
+        async def on_participant_joined(transport, participant):
+            logger.info(f"Participant joined: {participant}")
+            await transport.capture_participant_transcription(participant["id"])
 
-            @transport.event_handler("on_participant_left")
-            async def on_participant_left(transport, participant, reason):
-                logger.info(f"Participant left: {participant}, reason: {reason}")
+        @transport.event_handler("on_participant_left")
+        async def on_participant_left(transport, participant, reason):
+            logger.info(f"Participant left: {participant}, reason: {reason}")
 
-            runner = PipelineRunner()
-            await runner.run(task)
+        runner = PipelineRunner()
+        await runner.run(task)
     finally:
         if transport:
             await transport.cleanup()
