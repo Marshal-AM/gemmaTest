@@ -1,0 +1,19 @@
+# Pipecat voice pipeline + API server
+pipecat-ai[daily,deepgram,silero]
+
+# Gemma 4 multimodal model (install torch separately — see scripts/setup.sh)
+transformers>=5.16
+accelerate
+huggingface_hub
+
+# API server
+fastapi
+uvicorn
+aiohttp
+python-dotenv
+loguru
+pyngrok
+numpy
+
+# torch is installed by scripts/setup.sh with the correct CUDA wheel for your VM.
+# For CPU-only dev: pip install torch
