@@ -83,8 +83,15 @@ The model loads **once at server startup** (not on every speech turn). If startu
 
 Terminal 1 — start vLLM (once per machine boot):
 ```bash
-./scripts/install_vllm.sh      # one-time: pip install vllm[audio]
+./scripts/install_vllm.sh      # one-time — installs cu129 wheel (NOT default PyPI cu130)
 ./scripts/start_vllm.sh        # prefix caching, chunked prefill, flash attn
+```
+
+If you see `libcudart.so.13: cannot open shared object file`, vLLM was installed for CUDA 13 by mistake. Fix:
+```bash
+pip uninstall -y vllm
+TORCH_CUDA_INDEX=cu129 ./scripts/install_vllm.sh
+python scripts/check_vllm.py
 ```
 
 Terminal 2 — start the voice bot:
