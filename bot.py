@@ -214,7 +214,6 @@ async def run_bot(room_url: str, token: str):
         tts = DeepgramTTSService(
             api_key=DEEPGRAM_API_KEY,
             sample_rate=16000,
-            push_start_frame=True,
             text_aggregation_mode=TextAggregationMode.TOKEN,
             settings=DeepgramTTSService.Settings(
                 voice=DEEPGRAM_VOICE,
