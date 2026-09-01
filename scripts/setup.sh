@@ -26,7 +26,7 @@ source venv/bin/activate
 echo "==> Upgrading pip"
 pip install --upgrade pip
 
-CUDA_INDEX="${TORCH_CUDA_INDEX:-cu126}"
+CUDA_INDEX="${TORCH_CUDA_INDEX:-cu129}"
 
 echo "==> Installing PyTorch + torchvision (${CUDA_INDEX})"
 pip install torch torchvision --index-url "https://download.pytorch.org/whl/${CUDA_INDEX}"

@@ -56,18 +56,24 @@ Your PyTorch CUDA wheel doesn't match your GPU. This is not a model bug — rein
 source venv/bin/activate
 python scripts/check_gpu.py          # diagnose
 
-# Try cu126 (most cloud GPUs), then cu128 (newest GPUs e.g. Blackwell):
+# Try cu126 (most cloud GPUs), then cu128 (newer GPUs e.g. Blackwell):
 TORCH_CUDA_INDEX=cu126 ./scripts/install_torch.sh
 # or
 TORCH_CUDA_INDEX=cu128 ./scripts/install_torch.sh
 
+# RTX 5080 / 50xx (compute capability 12.0) — use cu129 or newer:
+TORCH_CUDA_INDEX=cu129 ./scripts/install_torch.sh
+# or
+TORCH_CUDA_INDEX=cu130 ./scripts/install_torch.sh
+
 ./scripts/start.sh
 ```
 
-| GPU generation | Try first |
-|----------------|-----------|
+| GPU generation | PyTorch CUDA index |
+|----------------|-------------------|
 | A100, L4, L40, RTX 30xx/40xx | `cu124` or `cu126` |
-| H100, H200, B200, RTX 50xx | `cu126` or `cu128` |
+| H100, H200 | `cu126` or `cu128` |
+| **RTX 5080 / 50xx (sm_120)** | **`cu129`, `cu130`, or `cu132`** |
 
 The model loads **once at server startup** (not on every speech turn). If startup fails, fix PyTorch before joining the room.
 

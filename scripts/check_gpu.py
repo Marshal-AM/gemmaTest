@@ -33,9 +33,15 @@ def main() -> int:
     except RuntimeError as e:
         print(f"ERROR:    GPU kernel test failed: {e}")
         print()
-        print("Your PyTorch CUDA wheel does not match this GPU. Try:")
-        print("  TORCH_CUDA_INDEX=cu126 ./scripts/install_torch.sh")
-        print("  TORCH_CUDA_INDEX=cu128 ./scripts/install_torch.sh")
+        print("Your PyTorch CUDA wheel does not match this GPU.")
+        if cap[0] >= 12:
+            print("RTX 50xx / Blackwell (sm_120) needs cu129, cu130, or cu132:")
+            print("  TORCH_CUDA_INDEX=cu129 ./scripts/install_torch.sh")
+            print("  TORCH_CUDA_INDEX=cu130 ./scripts/install_torch.sh")
+        else:
+            print("Try:")
+            print("  TORCH_CUDA_INDEX=cu126 ./scripts/install_torch.sh")
+            print("  TORCH_CUDA_INDEX=cu128 ./scripts/install_torch.sh")
         print()
         print("Then restart: ./scripts/start.sh")
         return 1

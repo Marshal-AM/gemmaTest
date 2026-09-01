@@ -150,8 +150,8 @@ class GemmaAudioLLMService(LLMService):
             raise RuntimeError(
                 f"PyTorch cannot run on GPU '{device_name}': {e}\n"
                 "Your PyTorch CUDA build does not match this GPU. Fix:\n"
-                "  TORCH_CUDA_INDEX=cu126 ./scripts/install_torch.sh\n"
-                "  TORCH_CUDA_INDEX=cu128 ./scripts/install_torch.sh\n"
+                "  RTX 5080/50xx: TORCH_CUDA_INDEX=cu129 ./scripts/install_torch.sh\n"
+                "  Other GPUs:    TORCH_CUDA_INDEX=cu126 ./scripts/install_torch.sh\n"
                 "Then: python scripts/check_gpu.py"
             ) from e
 
