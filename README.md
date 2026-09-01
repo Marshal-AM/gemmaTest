@@ -48,6 +48,20 @@ curl http://localhost:7860/health
 
 ## GPU / CUDA troubleshooting
 
+**Error: `AmbiguousGlobalPerLayerAttributeError: 'head_dim' is a per-layer attribute`**
+
+vLLM **0.27.x** cannot load Gemma 4 with transformers 5.15+. You may also be hitting a **system** vLLM (`/usr/local/bin/vllm`) instead of the project venv.
+
+```bash
+source venv/bin/activate
+which vllm                    # must be .../gemmaTest/venv/bin/vllm
+TORCH_CUDA_INDEX=cu129 VLLM_MIN_VERSION=0.28.0 ./scripts/install_vllm.sh
+python scripts/check_vllm.py  # must show vLLM >= 0.28.0
+./scripts/start_vllm.sh
+```
+
+On **A100 / H100**, use `TORCH_CUDA_INDEX=cu126` for PyTorch if you prefer; vLLM 0.28 wheels are **cu129** only, and the install script will align the torch stack automatically.
+
 **Error: `no kernel image is available for execution on the device`**
 
 Your PyTorch CUDA wheel doesn't match your GPU. This is not a model bug — reinstall PyTorch:

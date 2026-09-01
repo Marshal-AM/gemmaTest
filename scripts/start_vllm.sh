@@ -18,6 +18,18 @@ fi
 # shellcheck disable=SC1091
 source venv/bin/activate
 
+if ! python -c "import vllm" >/dev/null 2>&1; then
+  echo "ERROR: vLLM is not installed in this venv."
+  echo "Fix: TORCH_CUDA_INDEX=cu129 ./scripts/install_vllm.sh"
+  exit 1
+fi
+
+VLLM_BIN="$(command -v vllm || true)"
+if [[ "${VLLM_BIN}" != "${PWD}/venv/bin/vllm" && "${VLLM_BIN}" != *"/gemmaTest/venv/bin/vllm" ]]; then
+  echo "WARN: 'vllm' on PATH is ${VLLM_BIN:-<missing>}"
+  echo "      Using venv python -m vllm to avoid system installs."
+fi
+
 if [ -f .env ]; then
   set -a
   # shellcheck disable=SC1091
@@ -40,7 +52,7 @@ export HF_TOKEN="${HF_TOKEN:-}"
 echo "==> Starting vLLM for ${MODEL_ID} on port ${PORT}"
 echo "    max_model_len=${MAX_MODEL_LEN}  gpu_memory_utilization=${GPU_MEM_UTIL}"
 
-exec vllm serve "${MODEL_ID}" \
+exec python -m vllm.entrypoints.cli.main serve "${MODEL_ID}" \
   --host 0.0.0.0 \
   --port "${PORT}" \
   --dtype bfloat16 \

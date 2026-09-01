@@ -8,7 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 CUDA_INDEX="${TORCH_CUDA_INDEX:-cu129}"
 CUDA_VERSION="${CUDA_INDEX#cu}"  # e.g. cu129 -> 129
-VLLM_MIN_VERSION="${VLLM_MIN_VERSION:-0.25.1}"
+VLLM_MIN_VERSION="${VLLM_MIN_VERSION:-0.28.0}"
 
 if [ ! -d venv ]; then
   echo "ERROR: venv not found. Run ./scripts/setup.sh first."
@@ -39,7 +39,7 @@ def parse_version(value: str) -> tuple[int, ...]:
         return (0,)
     return tuple(int(part) for part in match.group(1).split("."))
 
-min_version = parse_version(os.environ.get("VLLM_MIN_VERSION", "0.25.1"))
+min_version = parse_version(os.environ.get("VLLM_MIN_VERSION", "0.28.0"))
 releases = json.load(
     urllib.request.urlopen(
         "https://api.github.com/repos/vllm-project/vllm/releases",
@@ -54,7 +54,7 @@ for release in releases:
         print(tag)
         break
 else:
-    print(os.environ.get("VLLM_MIN_VERSION", "0.25.1"))
+    print(os.environ.get("VLLM_MIN_VERSION", "0.28.0"))
 PY
 )"
 
@@ -67,11 +67,40 @@ echo "    vLLM version: ${VLLM_VERSION}"
 WHEEL_URL="https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}+cu${CUDA_VERSION}-cp38-abi3-manylinux_2_28_${CPU_ARCH}.whl"
 echo "    ${WHEEL_URL}"
 
-if ! pip install "${WHEEL_URL}"; then
-  echo "ERROR: Failed to install vLLM cu${CUDA_VERSION} wheel."
-  echo "Try a different CUDA index, e.g.:"
-  echo "  TORCH_CUDA_INDEX=cu128 ./scripts/install_vllm.sh"
-  exit 1
+install_vllm_wheel() {
+  pip install "$1"
+}
+
+if ! install_vllm_wheel "${WHEEL_URL}"; then
+  echo "WARN: No vLLM cu${CUDA_VERSION} wheel for v${VLLM_VERSION}, trying fallbacks..."
+  INSTALLED=0
+  for FALLBACK_CUDA in cu129 cu128 cu130; do
+    if [ "${FALLBACK_CUDA}" = "cu${CUDA_VERSION}" ]; then
+      continue
+    fi
+    if [ "${FALLBACK_CUDA}" = "cu130" ]; then
+      FALLBACK_URL="https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}-cp38-abi3-manylinux_2_28_${CPU_ARCH}.whl"
+    else
+      FALLBACK_URL="https://github.com/vllm-project/vllm/releases/download/v${VLLM_VERSION}/vllm-${VLLM_VERSION}+${FALLBACK_CUDA}-cp38-abi3-manylinux_2_28_${CPU_ARCH}.whl"
+    fi
+    echo "    trying ${FALLBACK_URL}"
+    if install_vllm_wheel "${FALLBACK_URL}"; then
+      echo "    installed ${FALLBACK_CUDA} wheel — aligning torch stack to match"
+      pip install torch torchvision torchaudio \
+        --index-url "https://download.pytorch.org/whl/${FALLBACK_CUDA}" \
+        --force-reinstall
+      CUDA_INDEX="${FALLBACK_CUDA}"
+      PYTORCH_INDEX="https://download.pytorch.org/whl/${FALLBACK_CUDA}"
+      INSTALLED=1
+      break
+    fi
+  done
+  if [ "${INSTALLED}" -ne 1 ]; then
+    echo "ERROR: Failed to install vLLM cu${CUDA_VERSION} wheel (or fallbacks)."
+    echo "Try explicitly:"
+    echo "  TORCH_CUDA_INDEX=cu129 VLLM_MIN_VERSION=0.28.0 ./scripts/install_vllm.sh"
+    exit 1
+  fi
 fi
 
 echo "==> Step 3/5: Re-pin torch stack (vLLM may have pulled wrong CUDA deps)"
