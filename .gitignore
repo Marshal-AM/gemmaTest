@@ -24,3 +24,7 @@ Thumbs.db
 # Model cache (downloaded at runtime)
 .cache/
 models/
+
+# Generated test artifacts
+elevenlabs_test.mp3
+sarvam_test.*

@@ -39,7 +39,8 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.audio.vad_processor import VADProcessor
-from pipecat.services.deepgram.tts import DeepgramTTSService
+from pipecat.services.sarvam.tts import SarvamHttpTTSService
+from pipecat.transcriptions.language import Language
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
 from gemma_llm_service import GemmaAudioLLMService
@@ -48,7 +49,10 @@ load_dotenv(override=True)
 
 DAILY_API_KEY = os.getenv("DAILY_API_KEY", "")
 PORT = int(os.getenv("PORT", "7860"))
-DEEPGRAM_VOICE = os.getenv("DEEPGRAM_VOICE", "aura-2-helena-en")
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip().strip('"').strip("'")
+SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "kavitha")
+SARVAM_MODEL = os.getenv("SARVAM_MODEL", "bulbul:v3")
+SARVAM_PACE = float(os.getenv("SARVAM_PACE", "1.0"))
 
 # NOTE: This bot requires GPU resources to run efficiently.
 # The Gemma 4 E2B model is compute-intensive and performs best with GPU acceleration.
@@ -217,9 +221,12 @@ def get_gemma_llm() -> GemmaAudioLLMService:
 
 
 async def run_bot(room_url: str, token: str):
-    """Run the Gemma + Deepgram bot inside a Daily.co room."""
+    """Run the Gemma + Sarvam bot inside a Daily.co room."""
     transport = None
     try:
+        if not SARVAM_API_KEY:
+            raise ValueError("SARVAM_API_KEY must be set")
+
         vad = VADProcessor(
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
@@ -242,48 +249,55 @@ async def run_bot(room_url: str, token: str):
             ),
         )
 
-        tts = DeepgramTTSService(
-            api_key=os.getenv("DEEPGRAM_API_KEY"),
-            voice=DEEPGRAM_VOICE,
-            sample_rate=16000,
-        )
+        async with aiohttp.ClientSession() as http_session:
+            tts = SarvamHttpTTSService(
+                api_key=SARVAM_API_KEY,
+                aiohttp_session=http_session,
+                sample_rate=16000,
+                settings=SarvamHttpTTSService.Settings(
+                    voice=SARVAM_SPEAKER,
+                    model=SARVAM_MODEL,
+                    language=Language.TA_IN,
+                    pace=SARVAM_PACE,
+                ),
+            )
 
-        pipeline = Pipeline(
-            [
-                transport.input(),
-                vad,
-                get_gemma_llm(),
-                tts,
-                transport.output(),
-            ]
-        )
+            pipeline = Pipeline(
+                [
+                    transport.input(),
+                    vad,
+                    get_gemma_llm(),
+                    tts,
+                    transport.output(),
+                ]
+            )
 
-        task = PipelineTask(
-            pipeline,
-            params=PipelineParams(
-                audio_in_sample_rate=16000,
-                audio_out_sample_rate=16000,
-                enable_metrics=True,
-                enable_usage_metrics=True,
-            ),
-        )
+            task = PipelineTask(
+                pipeline,
+                params=PipelineParams(
+                    audio_in_sample_rate=16000,
+                    audio_out_sample_rate=16000,
+                    enable_metrics=True,
+                    enable_usage_metrics=True,
+                ),
+            )
 
-        @transport.event_handler("on_first_participant_joined")
-        async def on_first_participant_joined(transport, participant):
-            logger.info(f"Participant joined Daily room: {participant}")
-            await transport.capture_participant_transcription(participant["id"])
+            @transport.event_handler("on_first_participant_joined")
+            async def on_first_participant_joined(transport, participant):
+                logger.info(f"Participant joined Daily room: {participant}")
+                await transport.capture_participant_transcription(participant["id"])
 
-        @transport.event_handler("on_participant_joined")
-        async def on_participant_joined(transport, participant):
-            logger.info(f"Participant joined: {participant}")
-            await transport.capture_participant_transcription(participant["id"])
+            @transport.event_handler("on_participant_joined")
+            async def on_participant_joined(transport, participant):
+                logger.info(f"Participant joined: {participant}")
+                await transport.capture_participant_transcription(participant["id"])
 
-        @transport.event_handler("on_participant_left")
-        async def on_participant_left(transport, participant, reason):
-            logger.info(f"Participant left: {participant}, reason: {reason}")
+            @transport.event_handler("on_participant_left")
+            async def on_participant_left(transport, participant, reason):
+                logger.info(f"Participant left: {participant}, reason: {reason}")
 
-        runner = PipelineRunner()
-        await runner.run(task)
+            runner = PipelineRunner()
+            await runner.run(task)
     finally:
         if transport:
             await transport.cleanup()
