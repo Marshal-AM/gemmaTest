@@ -140,7 +140,6 @@ async def create_daily_room() -> tuple[str, str]:
                     "exp": int(time.time()) + 3600,
                     "enable_chat": False,
                     "enable_emoji_reactions": False,
-                    "privacy": "public",
                 }
             },
         ) as response:
